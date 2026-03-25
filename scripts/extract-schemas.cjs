@@ -4,7 +4,7 @@ const { execFileSync, execSync } = require('child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const CACHE_DIR = path.join(ROOT_DIR, '.n8n-cache');
-const OUTPUT_DIR = path.join(ROOT_DIR, 'dist/schemas');
+const OUTPUT_DIR = path.join(ROOT_DIR, 'dist');
 
 function run(command, cwd = ROOT_DIR) {
     console.log(`> ${command}`);
@@ -85,111 +85,6 @@ function extractAllVersionSchemas(mod) {
     return null;
 }
 
-// --- .d.ts generation ---
-
-function sanitizeVersionName(ver) {
-    return `V${String(ver).replace(/\./g, '_')}`;
-}
-
-function mapPropertyType(prop) {
-    switch (prop.type) {
-        case 'string':
-        case 'color':
-            if (prop.options && prop.options.length > 0) {
-                return prop.options.map(o => `'${o.value}'`).join(' | ');
-            }
-            return 'string';
-        case 'number':
-            return 'number';
-        case 'boolean':
-            return 'boolean';
-        case 'options':
-            if (prop.options && prop.options.length > 0) {
-                return prop.options.map(o => `'${o.value}'`).join(' | ');
-            }
-            return 'string';
-        case 'multiOptions':
-            if (prop.options && prop.options.length > 0) {
-                return `Array<${prop.options.map(o => `'${o.value}'`).join(' | ')}>`;
-            }
-            return 'string[]';
-        case 'collection':
-        case 'fixedCollection':
-            return 'Record<string, unknown>';
-        case 'json':
-            return 'string | object';
-        case 'resourceLocator':
-            return 'string | { __rl: true; mode: string; value: string }';
-        case 'resourceMapper':
-            return 'Record<string, unknown>';
-        case 'notice':
-            return null; // skip, not a real parameter
-        case 'filter':
-            return 'Record<string, unknown>';
-        case 'assignmentCollection':
-            return '{ assignments: Array<{ id: string; name: string; value: unknown; type: string }> }';
-        default:
-            return 'unknown';
-    }
-}
-
-function generateNamespaceBody(schema, indent) {
-    const lines = [];
-    lines.push(`${indent}interface Params {`);
-    for (const prop of schema.properties) {
-        const tsType = mapPropertyType(prop);
-        if (tsType === null) continue; // skip notice etc.
-        const optional = prop.required ? '' : '?';
-        const comment = prop.description
-            ? ` /** ${prop.description.replace(/\*\//g, '* /')} */`
-            : '';
-        const safeName = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(prop.name)
-            ? prop.name
-            : `'${prop.name}'`;
-        if (comment) lines.push(`${indent}  ${comment}`);
-        lines.push(`${indent}  ${safeName}${optional}: ${tsType};`);
-    }
-    lines.push(`${indent}}`);
-
-    if (schema.credentials && schema.credentials.length > 0) {
-        lines.push('');
-        lines.push(`${indent}type Credentials = ${schema.credentials.map(c => `'${c.name}'`).join(' | ')};`);
-    }
-
-    return lines.join('\n');
-}
-
-function generateDts(nodeName, versionSchemas) {
-    const lines = [];
-    lines.push(`// Auto-generated from n8n source. Do not edit manually.`);
-    lines.push('');
-
-    const sortedVersions = Object.keys(versionSchemas)
-        .map(Number)
-        .sort((a, b) => a - b);
-
-    const displayName = Object.values(versionSchemas)[0]?.displayName || nodeName;
-    lines.push(`/** ${displayName} */`);
-    lines.push(`declare namespace ${nodeName} {`);
-
-    for (const ver of sortedVersions) {
-        const schema = versionSchemas[ver];
-        if (!schema) continue;
-        const nsName = sanitizeVersionName(ver);
-        lines.push('');
-        lines.push(`  namespace ${nsName} {`);
-        lines.push(generateNamespaceBody(schema, '    '));
-        lines.push(`  }`);
-    }
-
-    lines.push('}');
-    lines.push('');
-    lines.push(`export = ${nodeName};`);
-    lines.push('');
-
-    return lines.join('\n');
-}
-
 async function main() {
     const n8nTag = process.argv[2];
     if (!n8nTag) {
@@ -268,22 +163,21 @@ async function main() {
 
     console.log(`\nExtracted: ${successCount} nodes, Skipped: ${errorCount}`);
 
-    // Generate .d.ts
-    console.log('\n=== Generating .d.ts files ===');
-    const dtsDir = path.join(OUTPUT_DIR, version);
-    fs.mkdirSync(dtsDir, { recursive: true });
-
-    for (const [nodeName, schemas] of Object.entries(allNodes)) {
-        const dts = generateDts(nodeName, schemas);
-        fs.writeFileSync(path.join(dtsDir, `${nodeName}.d.ts`), dts);
+    // Output JSON
+    if (!fs.existsSync(OUTPUT_DIR)) {
+        fs.mkdirSync(OUTPUT_DIR, { recursive: true });
     }
 
-    console.log(`Generated ${Object.keys(allNodes).length} .d.ts files in ${dtsDir}`);
+    const output = {
+        n8nVersion: version,
+        generatedAt: new Date().toISOString(),
+        nodeCount: Object.keys(allNodes).length,
+        nodes: allNodes,
+    };
 
-    // Zip for release
-    const zipName = `schemas-${version}.zip`;
-    run(`cd dist/schemas && zip -r ../../dist/${zipName} ${version}/`);
-    console.log(`\nPackaged as dist/${zipName}`);
+    const outPath = path.join(OUTPUT_DIR, `schemas-${version}.json`);
+    fs.writeFileSync(outPath, JSON.stringify(output, null, 2));
+    console.log(`\nSaved to ${outPath}`);
 
     // Cleanup
     console.log('\n=== Cleaning up ===');

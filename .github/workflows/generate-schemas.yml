@@ -36,7 +36,7 @@ jobs:
         run: |
           VERSION="${{ steps.resolve.outputs.version }}"
           ASSETS=$(gh release view "n8n@${VERSION}" --json assets -q '.assets[].name' 2>/dev/null || echo "")
-          if echo "$ASSETS" | grep -q "schemas-${VERSION}.zip"; then
+          if echo "$ASSETS" | grep -q "schemas-${VERSION}.json"; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Schemas already exist for n8n@${VERSION}"
           else
@@ -79,5 +79,5 @@ jobs:
         run: |
           VERSION="${{ steps.resolve.outputs.version }}"
           gh release upload "n8n@${VERSION}" \
-            dist/schemas-${VERSION}.zip \
+            dist/schemas-${VERSION}.json \
             --clobber
