@@ -1,0 +1,69 @@
+name: Poll n8n Releases
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # every 6 hours
+  workflow_dispatch:
+    inputs:
+      n8n_version:
+        description: 'Specific n8n version to build (e.g. 2.13.2). Leave empty to auto-detect latest.'
+        required: false
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve n8n version
+        id: resolve
+        run: |
+          if [ -n "${{ github.event.inputs.n8n_version }}" ]; then
+            VERSION="${{ github.event.inputs.n8n_version }}"
+          else
+            VERSION=$(curl -s https://api.github.com/repos/n8n-io/n8n/releases/latest | jq -r '.tag_name' | sed 's/^n8n@//')
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=n8n@$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved n8n version: $VERSION"
+
+      - name: Check if already built
+        id: check
+        run: |
+          VERSION="${{ steps.resolve.outputs.version }}"
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            https://api.github.com/repos/${{ github.repository }}/releases/tags/n8n@${VERSION})
+          if [ "$STATUS" = "200" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Release n8n@${VERSION} already exists, skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "New version detected: ${VERSION}"
+          fi
+
+      - name: Setup pnpm
+        if: steps.check.outputs.skip == 'false'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Extract node catalog
+        if: steps.check.outputs.skip == 'false'
+        run: node scripts/extract.cjs "${{ steps.resolve.outputs.tag }}"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.resolve.outputs.version }}"
+          gh release create "n8n@${VERSION}" \
+            --title "n8n@${VERSION}" \
+            --notes "Node catalog for n8n@${VERSION}" \
+            dist/nodes-${VERSION}.json

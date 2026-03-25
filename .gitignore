@@ -1,0 +1,3 @@
+.n8n-cache/
+dist/
+node_modules/
