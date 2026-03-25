@@ -1,0 +1,83 @@
+name: Generate Node Schemas
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      n8n_version:
+        description: 'n8n version (e.g. 2.13.2)'
+        required: true
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: resolve
+        run: |
+          if [ -n "${{ github.event.inputs.n8n_version }}" ]; then
+            VERSION="${{ github.event.inputs.n8n_version }}"
+          else
+            # Triggered by release — extract version from tag
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#n8n@}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=n8n@$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Check if schemas already exist
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.resolve.outputs.version }}"
+          ASSETS=$(gh release view "n8n@${VERSION}" --json assets -q '.assets[].name' 2>/dev/null || echo "")
+          if echo "$ASSETS" | grep -q "schemas-${VERSION}.zip"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Schemas already exist for n8n@${VERSION}"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read n8n engine requirements
+        if: steps.check.outputs.skip == 'false'
+        id: engines
+        run: |
+          git clone --depth 1 --branch "n8n@${{ steps.resolve.outputs.version }}" \
+            --filter=blob:none --sparse https://github.com/n8n-io/n8n.git .n8n-engines
+          cd .n8n-engines && git sparse-checkout set --no-cone package.json
+          NODE_VER=$(node -e "const p=require('./package.json'); console.log(p.engines?.node?.replace(/[^0-9.]/g,'') || '22')")
+          PNPM_VER=$(node -e "const p=require('./package.json'); console.log(p.engines?.pnpm?.replace(/[^0-9.]/g,'') || '10')")
+          echo "node_version=$NODE_VER" >> "$GITHUB_OUTPUT"
+          echo "pnpm_version=$PNPM_VER" >> "$GITHUB_OUTPUT"
+          cd .. && rm -rf .n8n-engines
+
+      - name: Setup pnpm
+        if: steps.check.outputs.skip == 'false'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ steps.engines.outputs.pnpm_version }}
+
+      - name: Setup Node.js
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.engines.outputs.node_version }}
+
+      - name: Extract schemas and generate .d.ts
+        if: steps.check.outputs.skip == 'false'
+        run: node scripts/extract-schemas.cjs "${{ steps.resolve.outputs.tag }}"
+
+      - name: Upload schemas to existing release
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.resolve.outputs.version }}"
+          gh release upload "n8n@${VERSION}" \
+            dist/schemas-${VERSION}.zip \
+            --clobber
