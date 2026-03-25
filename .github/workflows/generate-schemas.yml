@@ -68,7 +68,7 @@ jobs:
         with:
           node-version: ${{ steps.engines.outputs.node_version }}
 
-      - name: Extract schemas and generate .d.ts
+      - name: Extract node schemas
         if: steps.check.outputs.skip == 'false'
         run: node scripts/extract-schemas.cjs "${{ steps.resolve.outputs.tag }}"
 
