@@ -1,32 +1,30 @@
 name: Poll n8n Releases
-
 on:
   schedule:
-    - cron: '0 */6 * * *' # every 6 hours
+    - cron: '0 9 * * *' # daily at 09:00 UTC
   workflow_dispatch:
     inputs:
       n8n_version:
         description: 'Specific n8n version to build (e.g. 2.13.2). Leave empty to auto-detect latest.'
         required: false
-
 jobs:
   check-and-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Resolve n8n version
         id: resolve
         run: |
           if [ -n "${{ github.event.inputs.n8n_version }}" ]; then
             VERSION="${{ github.event.inputs.n8n_version }}"
           else
-            VERSION=$(curl -s https://api.github.com/repos/n8n-io/n8n/releases/latest | jq -r '.tag_name' | sed 's/^n8n@//')
+            VERSION=$(curl -s https://api.github.com/repos/n8n-io/n8n/releases \
+              | jq -r '[.[] | select(.tag_name | test("^n8n@[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].tag_name' \
+              | sed 's/^n8n@//')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=n8n@$VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved n8n version: $VERSION"
-
       - name: Check if already built
         id: check
         run: |
@@ -40,7 +38,6 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "New version detected: ${VERSION}"
           fi
-
       - name: Read n8n engine requirements
         if: steps.check.outputs.skip == 'false'
         id: engines
@@ -55,23 +52,19 @@ jobs:
           echo "pnpm_version=$PNPM_VER" >> "$GITHUB_OUTPUT"
           echo "Node: $NODE_VER, pnpm: $PNPM_VER"
           cd .. && rm -rf .n8n-engines
-
       - name: Setup pnpm
         if: steps.check.outputs.skip == 'false'
         uses: pnpm/action-setup@v4
         with:
           version: ${{ steps.engines.outputs.pnpm_version }}
-
       - name: Setup Node.js
         if: steps.check.outputs.skip == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ steps.engines.outputs.node_version }}
-
       - name: Extract node catalog
         if: steps.check.outputs.skip == 'false'
         run: node scripts/extract.cjs "${{ steps.resolve.outputs.tag }}"
-
       - name: Create GitHub Release
         if: steps.check.outputs.skip == 'false'
         env:
